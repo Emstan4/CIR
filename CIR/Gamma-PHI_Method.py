@@ -11,136 +11,191 @@ from matplotlib import pyplot as plot
 
 
 
+
 #DMF
-T_c = 653  #k
-P_c = 47.1*100 #bar
-w_c = 0.329
-a   = 1.92E-2
-V_liq2 = 77.44/1000 #m3/mol
+T_c = 562.2  #K
+P_c = 48.9*100 #kpa
+w_c = 0.212
+a   = 0#1.92E-2
+rho_d = 876
+MM_d  = 78.11
+V_liq1 = (MM_d/rho_d)#77.44/1000 #m3/kmol or L/mol
 b = 0
-rho_d = 944
-MM_d  = 73.09
-V_d = (MM_d/rho_d)
- 
 
 # water
-T_c1 = 647.3 #k
-P_c1 = 221.2*100 #bar
-w_c1 = 0.344
-V_liq1 = 18.02/1000 #m3/mol
-a1 = -1.09e-2
+T_c1 = 553.5 #k
+P_c1 = 40.73*100 #bar
+w_c1 = 0.211
+
+rho_w = 779
+MM_w  = 87.16
+V_liq2 = MM_d/rho_w #m3/kmol
+a1 = 0#-1.09e-2
 b1 = 0
 R=8.31424
-T = 40 + 273 # kPa
-rho_w = 999.97
-MM_w  = 18.0158
-V_w = (MM_w/rho_w)
-
+T = 25 + 273 # K
 # Antone constants
 
-A_2 = 7.1085
-B_2 = 1537.78
-C_2 = 210.39
-A_1 = 8.07131
-B_1 = 1730.63
-C_1 = 233.426 
+ 
+A_1 = 6.87947202
+B_1 = 1196.76
+C_1 = 219.161
+A_2 = 6.85146
+B_2 = 1206.47
+C_2 = 223.136
 
-
-P_sat1 =(10**((A_1)-((B_1)/(C_1+(T-273.15)))))*0.133333
-P_sat2 =(10**((A_2)-(B_2/(C_2+(T-273.15)))))*0.133333
+def Psats(T):
+    conversion_factor = 101.325/760 #from mmHg to kPa
+    P_satA =(10**((A_1)-(B_1/(C_1+(T-273.15)))))*conversion_factor
+    P_satB =(10**((A_2)-(B_2/(C_2+(T-273.15)))))*conversion_factor
+    return [P_satA, P_satB]
+# Wilson Coefficient   
+A21 = 0.6
+A12 = 0.96
+# B models
+def B_model(T):
+    TrA =T/T_c
+    TrB =T/T_c1
+    #Component A
+    B_o =(0.1445)-(0.333/TrA )-(0.1385/(TrA **2))-(0.0121/(TrA **3))-(0.000607/(TrA **8))
+    B_2 =0.0637+(0.331/TrA**2)-(0.423/TrA **3)-(0.008/TrA **8)
+    B_3 =(a/TrA**6)-(b/TrA**8)    
+    B_comp_A =((R*T_c)/P_c)*(B_o+(w_c*B_2)+B_3)
     
-# Wilson Coefficient
+    #Component B
+    B_o =(0.1445)-(0.333/TrB )-(0.1385/(TrB **2))-(0.0121/(TrB **3))-(0.000607/(TrB **8))
+    B_2 =0.0637+(0.331/TrB**2)-(0.423/TrB**3)-(0.008/TrB**8)
+    B_3 =(a1/TrB **6)-(b1/TrB **8)
+    B_comp_B =((R*T_c1)/P_c1)*(B_o+(w_c1*B_2)+B_3)
+    
+    return [B_comp_A, B_comp_B]
 
-A21 = 0.3
-A12 = 2.5
+    
+def fugacity(T, P):
+    B_T = B_model(T)
+    fug_A = np.exp(B_T[0]*P/(R*T))
+    fug_B = np.exp(B_T[1]*P/(R*T))
+    return [fug_A, fug_B]
 
-def B1(P):
+#fugacity at saturated conditions
+def fuga_sat(T):
+    P_sat = Psats(T)
+    B_T = B_model(T)
+    fug_sat_A = np.exp(B_T[0]*P_sat[0]/(R*T))
+    fug_sat_B = np.exp(B_T[1]*P_sat[1]/(R*T))
+    return [fug_sat_A, fug_sat_B]
+    
+def phi(T, P):
+    P_sat = Psats(T)
+    fug = fugacity(T, P)
+    fug_sat = fuga_sat(T)
+    phi_A = (fug[0]/fug_sat[0])*np.exp(-V_liq1*(P-P_sat[0])/(R*T))
+    phi_B = (fug[1]/fug_sat[1])*np.exp(-V_liq2*(P-P_sat[1])/(R*T))
+    return [phi_A, phi_B]
+
+def lngamma(x):
+    x_2 = 1 - x
+    lngamma_A = -np.log(x + (x_2*A12)) + x_2*((A12/(x + (x_2*A12))) - (A21/(x_2 + (x*A21)))) 
+    lngamma_B = -np.log(x_2 + (x*A21)) - x*((A12/(x + (x_2*A12))) - (A21/(x_2 + (x*A21))))
+    return [lngamma_A, lngamma_B]
+    
+def gamma(x):
+    ln_gamma = lngamma(x)
+    gamma_A = np.exp(ln_gamma[0])
+    gamma_B = np.exp(ln_gamma[1])
+    return [gamma_A, gamma_B]
+    
+    
+def solver(T, y):
+    error = 1e-5
     xo = 0.1
-    error = 1e-4
-    diff = 2
-    yo = 0.6
-    
-    while diff > error:
-        x_2 = 1 - xo
-        #Water
-
-        T_r1 =T/T_c1
-#    #Water
-#    
-        B_o =(0.1445)-(0.333/T_r1 )-(0.1385/(T_r1 **2))-(0.0121/(T_r1 **3))-(0.000607/(T_r1 **8))
-        B_2 =0.0637+(0.331/T_r1**2)-(0.423/T_r1**3)-(0.008/T_r1**8)
-        B_3 =(a1/T_r1 **6)-(b1/T_r1 **8)
-        B1 =((R*T_c1)/P_c1)*(B_o+(w_c1*B_2)+B_3)
-       
-        phi1 = np.exp(B1*P/(R*(T)))
-        phi_sat1= np.exp(B1*P_sat1/(R*T))
+    y2 = 1 - y
+    Po = 11.6
+    difference = 1
+    while difference > error:
+        gam = gamma(xo)
+        phi_list = phi(T, Po)
+        psat = Psats(T)
         
-        #DMF
-        T_r =T/T_c
-        B_o2 =(0.1445)-(0.333/T_r )-(0.1385/(T_r **2))-(0.0121/(T_r **3))-(0.000607/(T_r **8))
-        B_22 =0.0637+(0.331/T_r **2)-(0.423/T_r **3)-(0.008/T_r **8)
-        B_32 =(a/T_r **6)-(b/T_r **8)
-        B2 =((R*T_c)/P_c)*(B_o2+(w_c*B_22)+B_32)
-        phi2 = np.exp(B2*P/(R*(T)))
-        phi_sat2= np.exp(B2*P_sat2/(R*T))
+        F_p1 = gam[0]
+        F_p2 = gam[1]
+        F_p3 = y*phi_list[0]/psat[0]
+        F_p4 = y2*phi_list[1]/psat[1]
         
-        
-        
-        phi_1a=(phi1/phi_sat1)*np.exp(-V_liq1*(P-P_sat1)/(R*T))
-        
-        
-        phi_2a=(phi2/phi_sat2)*np.exp(-V_liq2*(P-P_sat2)/(R*T))
-        
-        
-        lngamma1=-np.log(xo + (x_2*A12)) + x_2*((A12/(xo + (x_2*A12))) - (A21/(x_2 + (xo*A21))))
-        gamma1=np.exp(lngamma1)
-        
-        
-        lngamma2=-np.log(x_2 + (xo*A21)) - xo*((A12/(xo + (x_2*A12)))-(A21/(x_2+(xo*A21))))
-        gamma2=np.exp(lngamma2)
-        
-        F_p1 = gamma1
-        F_p2 = gamma2
-        F_pp1 = (P*phi_1a/P_sat1) 
-        F_pp2 = (P*phi_2a/P_sat2) 
-        diff = (abs(yo*F_pp1 - xo*F_p1) + abs((1 - yo)*F_pp2 - ((1 - xo)*F_p2)))
-        x = (F_pp1*(F_pp2 - F_p2)/(F_p1*F_pp2 - F_pp1*F_p2))
-        y = x*(F_p1/F_pp1)
+        mat1 = np.array([[-F_p1, F_p3],
+                         [ F_p2, F_p4]])
+        mat2 = np.array([[0],
+                         [F_p2]])
+         
+        mat1 = np.linalg.inv(mat1)                
+        x = np.dot(mat1,mat2)
+        difference = abs(x[0,0] - xo)
+        P = x[1,0]
+        x = x[0,0]        
         xo = x
-        yo = y
+        Po = P
+        
+    return [x, P]   
     
-    
-    
-    return [y, x] 
-    
-# Experimental Data
 
-xe = [0, 0.0977, 0.1301, 0.3010, 0.5036, 0.6201, 0.6315, 0.7267, 0.80, 0.857, 0.8956, 0.9412, 0.9447, 0.9725]
-ye = [0, 0.4133, 0.4624, 0.699, 0.8344, 0.8913, 0.8960, 0.9292, 0.9552, 0.9686, 0.9784, 0.9872, 0.9880, 0.9940]
-
-s = 273
-Te = [109.5+s, 98.15+s, 96.6+s, 86.7+s, 79.05+s, 75.85+s, 75.2+s, 72.35+s, 70.7+s, 69.35+s, 68.6+s, 67.6+s, 67.05+s, 67.35+s]
-
-
-
-pplot = []
-multi = 101.325/760
 npoints = 1000
-pseries = np.linspace(9.4*multi, 55.2*multi, npoints)
+yseries = np.linspace(0.01, 1, npoints)
 xi = []
 yi = []
-pe =  np.array([9.267461727,10.97176341,13.65783898,16.37613847,16.9867583,19.43398832,21.42718455,24.03466462,26.74904395,26.844185,27.2972197,29.00787015,31.04486903,34.14598065,35.62870018,35.99599519,37.41619857,39.15074369,42.03395549,43.44955037,44.87044898,46.98272585,50.28499502,53.2317943,55.19282956])
-pe_mod = multi*pe
-xe = [0,0.0441,0.1141,0.1853,0.2013,0.2652,0.3166,0.3821,0.4470,0.4492,0.4596,0.4977,0.5406,0.6011,0.6283,0.6349,0.6600,0.6900,0.7394,0.7640,0.7893,0.8286,0.8952,0.9583,1.0000]
-ye = [0, 0.1989,0.3891,0.5439,0.5710,0.6526,0.7054,0.7606,0.8099,0.8113,0.8179,0.8415,0.8670,0.8963,0.9088,0.9116,0.9225,0.9343,0.9500,0.9572,0.9635,0.9731,0.9854,0.9949,1.0000]
+
+
+xe = [
+0.1035,
+0.175,
+0.2760,
+0.377,
+0.433,
+0.509,
+0.583,
+0.694,
+0.7945,
+0.9005,
+0.9500
+]
+
+ye = [
+0.1375,
+0.217,
+0.313,
+0.4015,
+0.446,
+0.505,
+0.562,
+0.6505,
+0.741,
+0.8565,
+0.922]
+
+
+pe = [102.05,
+104.5,
+106.75,
+108.1,
+108.45,
+108.65,
+108.3,
+106.9,
+104.5,
+100.6,
+98.15]
+
+pe = (101/760)*np.array(pe)
+
+print pe
 for i in range(npoints):
     
-    p = pseries[i]
-    plotter = B1(p)
-    xi.append((plotter[0]))
+    y = yseries[i]
+    plotter = solver(T, y)
+    xi.append(plotter[0])
     yi.append(plotter[1])
-plot.xlabel("$x$")  
-plot.ylabel("$P$ $kPa$") 
-plot.title("$Pxy$")   
-plot.plot(xe,ye,'ro',yi,xi)
-plot.show()
+plot.subplot(2,1,1)
+plot.plot(yseries, yi,xi, yi, ye, pe, 'ro', xe, pe, 'bo')
+
+plot.subplot(2,1,2)
+plot.plot(xe, ye, 'ro', xi, yseries, yseries, yseries)
+plot.show()    
